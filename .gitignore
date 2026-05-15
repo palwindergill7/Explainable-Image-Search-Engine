@@ -5,3 +5,7 @@ Experimenter.ipynb
 # Data folder
 Data/*
 !Data/.gitkeep
+
+# Ignore OpenDocument Text files
+~$cuments.odt
+Documents.odt
