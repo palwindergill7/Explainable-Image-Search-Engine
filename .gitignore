@@ -9,3 +9,5 @@ Data/*
 # Ignore OpenDocument Text files
 ~$cuments.odt
 Documents.odt
+
+yolov8n-pose.pt

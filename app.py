@@ -8,12 +8,16 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 from pathlib import Path
 import warnings
+from shapely.geometry import LineString, Point
+import cv2
 
 from Search.search import search_images
 from Search.image_search import search_images_by_image
-from utils.saliency_map import generate_saliency_map
-from utils.grad_cam import generate_grad_cam_overlay
+from utils.text_search_explanations.saliency_map import generate_saliency_map
+
 from utils.image_search_explanations.image_saliency_map import generate_saliency_map_for_image
+from utils.Image_Composition.ICC import extract_icc, draw_icc_overlay
+from utils.feature_visualization.color_histogram import compute_histogram, draw_histogram
 
 warnings.filterwarnings('ignore')
 
@@ -30,6 +34,10 @@ if 'search_type' not in st.session_state:
     st.session_state.search_type = None
 if 'show_image_explanation' not in st.session_state:
     st.session_state.show_image_explanation = None
+if 'show_icc' not in st.session_state:
+    st.session_state.show_icc = None
+if 'show_color_histogram' not in st.session_state:
+    st.session_state.show_color_histogram = None
 
 # --- Part 1: Initial Loading of Website ---
 
@@ -88,6 +96,8 @@ else:
         st.session_state.show_explanation = None
         st.session_state.show_grad_cam = None
         st.session_state.show_image_explanation = None
+        st.session_state.show_icc = None
+        st.session_state.show_color_histogram = None
 
 # --- Part 2: Search Query and Result Loading ---
 
@@ -110,6 +120,15 @@ if st.session_state.search_triggered and model:
                 img = Image.open(result['image_path']).convert("RGB")
                 img = img.resize((300, 300))
                 st.image(img, caption=f"{result['filename']}\nScore: {result['score']:.3f}")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(f"ICC Explanation", key=f"icc_{i}"):
+                        st.session_state.show_icc = i
+                
+                with col2:
+                    if st.button(f"Color Histogram", key=f"color_hist_{i}"):
+                        st.session_state.show_color_histogram = i
 
                 if st.session_state.search_type == "text":
                     if st.button(f"Saliency Map", key=f"explain_{i}"):
@@ -167,8 +186,70 @@ if st.session_state.show_grad_cam is not None:
     result_to_explain = st.session_state.results[st.session_state.show_grad_cam]
     show_grad_cam_dialog(result_to_explain, query, model, transform)
 
-    result_to_explain = st.session_state.results[st.session_state.show_explanation]
-    show_explanation_dialog(result_to_explain, query, model, transform)
+@st.dialog("ICC Explanation")
+def show_icc_dialog(result_to_explain):
+    image = Image.open(result_to_explain['image_path']).convert("RGB")
+    
+    # Resize image for display, maintaining aspect ratio
+    max_width = 800
+    width, height = image.size
+    if width > max_width:
+        new_height = int(max_width * height / width)
+        display_image = image.resize((max_width, new_height))
+    else:
+        display_image = image
+
+    image_np = np.array(image)
+    display_image_np = np.array(display_image)
+    
+    # Extract ICC from original full-res image for accuracy
+    icc_data = extract_icc(image_np)
+
+    # Scale ICC data to match the display image size
+    scale_x = display_image.width / image.width
+    scale_y = display_image.height / image.height
+
+    scaled_icc_data = {
+        'poselines': [LineString([(p[0] * scale_x, p[1] * scale_y) for p in line.coords]) for line in icc_data['poselines']],
+        'action_lines': [LineString([(p[0] * scale_x, p[1] * scale_y) for p in line.coords]) for line in icc_data['action_lines']],
+        'action_centers': [Point(p.x * scale_x, p.y * scale_y) for p in icc_data['action_centers']]
+    }
+
+    overlay_image = draw_icc_overlay(display_image_np, scaled_icc_data)
+    
+    st.image(overlay_image, caption="ICC Overlay")
+
+    if st.button("Back to results"):
+        st.session_state.show_icc = None
+
+if st.session_state.show_icc is not None:
+    result_to_explain = st.session_state.results[st.session_state.show_icc]
+    show_icc_dialog(result_to_explain)
+
+@st.dialog("Color Histogram Explanation")
+def show_color_histogram_dialog(result_to_explain):
+    image_path = result_to_explain['image_path']
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.array(image)
+    # Convert RGB to BGR for OpenCV
+    image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+    
+    # Get image metadata
+    filename = Path(image_path).name
+    file_size = os.path.getsize(image_path) // 1024  # Size in KB
+    image_size = image.size  # (width, height)
+    
+    hist_r, hist_g, hist_b, stats = compute_histogram(image_bgr)
+    fig = draw_histogram(hist_r, hist_g, hist_b, stats, filename, file_size, image_size)
+    
+    st.pyplot(fig)
+
+    if st.button("Back to results"):
+        st.session_state.show_color_histogram = None
+
+if st.session_state.show_color_histogram is not None:
+    result_to_explain = st.session_state.results[st.session_state.show_color_histogram]
+    show_color_histogram_dialog(result_to_explain)
 
 @st.dialog("Image Saliency Map Explanation")
 def show_image_explanation_dialog(result_to_explain, query_image, model):
